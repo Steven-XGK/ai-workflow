@@ -3,5 +3,5 @@ https://steven-xgk.github.io/ai-workflow/
 
 ----------------
 也可以通过
-https://steven-xgk.github.io/ai-workflow/V66.html
+https://steven-xgk.github.io/ai-workflow/V67.html
 后面添加文件名访问之前版本，作为备份使用
