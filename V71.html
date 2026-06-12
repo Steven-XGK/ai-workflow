@@ -3923,8 +3923,12 @@
         const imgMap = {}; // filename -> blob
         const videoMap = {};
         
+        const totalNodes = Object.keys(flowData).length;
+        var procIdx = 0;
         for (const key in flowData) {
             const n = flowData[key];
+            procIdx++;
+            if (procIdx % 3 === 0) { document.getElementById('loadingText').innerText = `处理节点 ${procIdx}/${totalNodes}...`; await new Promise(r => setTimeout(r, 0)); }
             if (n.data && n.data.b64) {
                 let blobData = null, ext = 'png';
                 if (n.data.b64.startsWith('blob:')) {
@@ -3942,6 +3946,7 @@
                     imgMap[fname] = blobData;
                     n.data.b64 = `images/${fname}`;
                 }
+                await new Promise(r => setTimeout(r, 0)); // 每次大图转换后让出主线程
             }
             if (n.data && n.data.videoUrl && window.imageBlobCache.has(n.data.videoUrl)) {
                 const blobData = window.imageBlobCache.get(n.data.videoUrl);
@@ -3956,6 +3961,7 @@
         }
 
         // Write project.json
+        document.getElementById('loadingText').innerText = '写入项目文件...'; await new Promise(r => setTimeout(r, 0));
         const jsonBlob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
         const jsonFile = await dirHandle.getFileHandle('project.json', { create: true });
         const jsonWritable = await jsonFile.createWritable();
@@ -3963,24 +3969,32 @@
         await jsonWritable.close();
 
         // Write images
+        const imgEntries = Object.entries(imgMap);
         let imgDir;
         try { imgDir = await dirHandle.getDirectoryHandle('images', { create: true }); } catch(e) { imgDir = await dirHandle.getDirectoryHandle('images'); }
-        for (const [fname, blob] of Object.entries(imgMap)) {
+        for (let i = 0; i < imgEntries.length; i++) {
+            const [fname, blob] = imgEntries[i];
+            document.getElementById('loadingText').innerText = `写入图片 ${i+1}/${imgEntries.length}...`;
             const fileHandle = await imgDir.getFileHandle(fname, { create: true });
             const writable = await fileHandle.createWritable();
             await writable.write(blob);
             await writable.close();
+            if (i % 2 === 0) await new Promise(r => setTimeout(r, 0)); // 每2张让出主线程
         }
 
         // Write videos
-        if (Object.keys(videoMap).length > 0) {
+        const vidEntries = Object.entries(videoMap);
+        if (vidEntries.length > 0) {
             let vidDir;
             try { vidDir = await dirHandle.getDirectoryHandle('videos', { create: true }); } catch(e) { vidDir = await dirHandle.getDirectoryHandle('videos'); }
-            for (const [fname, blob] of Object.entries(videoMap)) {
+            for (let i = 0; i < vidEntries.length; i++) {
+                const [fname, blob] = vidEntries[i];
+                document.getElementById('loadingText').innerText = `写入视频 ${i+1}/${vidEntries.length}...`;
                 const fileHandle = await vidDir.getFileHandle(fname, { create: true });
                 const writable = await fileHandle.createWritable();
                 await writable.write(blob);
                 await writable.close();
+                if (i % 2 === 0) await new Promise(r => setTimeout(r, 0));
             }
         }
         createToastMsg(`💾 已保存到项目文件夹！`);
@@ -3999,6 +4013,13 @@
         // 优先使用已存储的项目目录句柄
         if (projectFolderHandle) {
             try {
+                // 验证并重新申请读写权限（页面刷新或长时间操作后权限会丢失）
+                const permOpts = { mode: 'readwrite' };
+                if ((await projectFolderHandle.queryPermission(permOpts)) !== 'granted') {
+                    if ((await projectFolderHandle.requestPermission(permOpts)) !== 'granted') {
+                        throw new Error('权限被拒绝');
+                    }
+                }
                 showLoading("正在保存到项目文件夹...");
                 await _writeProjectToFolder(projectFolderHandle, projectFolderName || 'AI_Workflow');
                 hideLoading();
@@ -4034,8 +4055,11 @@
             const zip = new JSZip();
             const imgFolder = zip.folder("images");
             const flowData = exportState.drawflow.drawflow.Home.data;
-            for (const key in flowData) {
+            var flowKeys = Object.keys(flowData);
+            for (let fi = 0; fi < flowKeys.length; fi++) {
+                const key = flowKeys[fi];
                 const n = flowData[key];
+                if (fi % 5 === 0) { document.getElementById('loadingText').innerText = `处理节点 ${fi+1}/${flowKeys.length}...`; await new Promise(r => setTimeout(r, 0)); }
                 if (n.data && n.data.b64) {
                     let blobData = null, ext = 'png';
                     if (n.data.b64.startsWith('blob:')) {
@@ -4053,8 +4077,10 @@
                         imgFolder.file(fname, blobData, { compression: 'STORE' });
                         n.data.b64 = `images/${fname}`;
                     }
+                    await new Promise(r => setTimeout(r, 0));
                 }
             }
+            document.getElementById('loadingText').innerText = '生成 ZIP 文件...'; await new Promise(r => setTimeout(r, 0));
             stripHtmlFromExport(flowData);
             zip.file("project.json", JSON.stringify(exportState));
             zip.generateAsync({ type: "blob", compression: 'STORE' }).then(function(content) {
@@ -4210,14 +4236,18 @@
             const imgFolder = zip.folder("images");
 
             const flowData = exportState.drawflow.drawflow.Home.data;
-            var imgCount = 0, processed = 0;
+            const flowKeys = Object.keys(flowData);
+            var processed = 0, imgCount = 0;
+            // 先统计图片数量
             for (const key in flowData) {
                 const n = flowData[key];
                 if (n.data && n.data.b64 && (n.data.b64.startsWith('blob:') || n.data.b64.startsWith('data:image'))) imgCount++;
             }
             var batched = 0;
-            for (const key in flowData) {
+            for (let fi = 0; fi < flowKeys.length; fi++) {
+                const key = flowKeys[fi];
                 const n = flowData[key];
+                if (fi % 5 === 0) { document.getElementById('loadingText').innerText = `导出节点 ${fi+1}/${flowKeys.length}...`; await new Promise(r => setTimeout(r, 0)); }
                 if (n.data && n.data.b64) {
                     let blobData = null;
                     let ext = 'png';
@@ -4239,9 +4269,8 @@
                         n.data.b64 = `images/${filename}`;
                         processed++;
                         document.getElementById('loadingText').innerText = `打包图片 ${processed}/${imgCount}...`;
-                        batched++;
-                        if (batched % 5 === 0) await new Promise(r => setTimeout(r, 0));
                     }
+                    await new Promise(r => setTimeout(r, 0)); // 每次大图转换后让出主线程
                 }
             }
 
