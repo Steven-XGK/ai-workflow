@@ -647,6 +647,7 @@
                 <option value="high">高 (高质量Key)</option>
             </select>
             <button class="run-btn" onclick="executeGraphNode()">▶ 按上方顺序提取并生成</button>
+            <button class="tl-btn" onclick="manualFetchCurrentNodeImage()" title="手动获取当前节点图片（生成成功后未显示时使用）" style="padding:6px 10px;font-size:12px;">📥 获取图片</button>
         </div>
         <span id="bp-node-id" style="display: none;">-</span>
     </div>
@@ -867,7 +868,7 @@
             { name: 'GRS',  host: 'https://grsai.dakka.com.cn', key: '', keyHigh: '' },
             { name: '智能引擎', host: 'https://api.lk888.ai/api',        key: '', keyHigh: '' },
             { name: '无极', host: 'https://wujiai.org',         key: '', keyHigh: '' },
-            { name: 'COM',  host: 'https://ai.comfly.chat',     key: '', keyHigh: '' },
+            { name: 'COM',  host: 'https://ai.comfly.org',     key: '', keyHigh: '' },
             { name: '贞贞', host: 'https://ai.t8star.cn',       key: '', keyHigh: '' }
         ];
     }
@@ -946,6 +947,11 @@
         var cfg = getActiveSiteConfig();
         if (useHighKey && cfg.keyHigh) return cfg.keyHigh;
         return cfg.key;
+    }
+
+    // 清理 HTTP 请求头中的非法字符（非 ISO-8859-1 字符会导致 fetch 抛出异常）
+    function sanitizeHeaderValue(val) {
+        return val.replace(/[^\x20-\x7E]/g, '').trim();
     }
 
     function syncConfigToActive() {
@@ -2923,11 +2929,11 @@
     }
     function isCOMFormat() {
         var host = getActiveSiteConfig().host || '';
-        return host.includes('ai.comfly.chat');
+        return host.includes('ai.comfly.chat') || host.includes('ai.comfly.org');
     }
     function isOpenAIFormat() {
         var host = getActiveSiteConfig().host || '';
-        return host.includes('ai.comfly.chat') || host.includes('ai.t8star.cn');
+        return host.includes('ai.comfly.chat') || host.includes('ai.comfly.org') || host.includes('ai.t8star.cn');
     }
     function isZhiheFormat() {
         var host = getActiveSiteConfig().host || '';
@@ -3001,7 +3007,7 @@
         let isGptModel = genNode.data.model && genNode.data.model.startsWith('gpt-image-2');
         let gptSizeMapping = null;
 
-        var token = apiKey.startsWith('Bearer ') ? apiKey : 'Bearer ' + apiKey;
+        var token = sanitizeHeaderValue(apiKey.startsWith('Bearer ') ? apiKey : 'Bearer ' + apiKey);
         var payload, endpoint;
         var siteHost = host;
 
@@ -3246,6 +3252,9 @@
             if (typeof taskId === 'object') taskId = taskId.task_id || taskId.id || null;
             if (!taskId) throw new Error(res.error || res.msg || res.message || "未获取到任务ID");
             
+            // 保存 taskId 和 host 到节点，用于后续手动获取图片
+            var gNode = editor.getNodeFromId(genId);
+            if (gNode) { gNode.data._taskId = taskId; gNode.data._host = ctx.host; gNode.data._isOpenAI = ctx.isOpenAI; editor.updateNodeDataFromId(genId, gNode.data); }
             setNodeStatus(genId, 'running');
             pollTaskInBackground(ctx.host, ctx.token, taskId, taskCard, ctx.finalText, genId, ctx.imgNodes.map(function(n){ return n.data.b64; }), ctx.genNode.data.ratio, ctx.genNode.data.size, ctx.isGptModel, ctx.isOpenAI);
             return true;
@@ -3562,6 +3571,92 @@
         submitGeneratorNode(genId);
     };
 
+    // 手动获取当前生成器节点的图片（轮询结束或图片未显示时使用）
+    window.manualFetchCurrentNodeImage = async function() {
+        const genIdStr = document.getElementById('bp-node-id').innerText;
+        if (genIdStr === '-') return createToastMsg("❌ 未选择节点", true);
+        const genId = parseInt(genIdStr);
+        const node = editor.getNodeFromId(genId);
+        if (!node || node.name !== 'generator') return createToastMsg("❌ 当前节点不是生成器", true);
+
+        // 1. 如果有缓存的 _resultUrl，直接尝试重新获取
+        if (node.data._resultUrl) {
+            createToastMsg("🔄 正在重新获取图片...");
+            try {
+                var newImgData = await convertImgToBlobUrl(node.data._resultUrl);
+                node.data.b64 = newImgData;
+                editor.updateNodeDataFromId(genId, node.data);
+                var el = document.getElementById('node-' + genId);
+                if (el) {
+                    var ph = el.querySelector('.gen-placeholder');
+                    if (ph) ph.style.display = 'none';
+                    var iel = el.querySelector('.gen-img');
+                    if (iel) { iel.src = newImgData; iel.style.display = 'block'; }
+                }
+                createToastMsg("✅ 图片获取成功！");
+                return;
+            } catch(e) {
+                console.warn("手动获取图片失败，尝试轮询:", e);
+            }
+        }
+
+        // 2. 如果有 _taskId，重新轮询获取结果
+        if (node.data._taskId) {
+            createToastMsg("🔄 正在查询任务状态...");
+            var host = node.data._host || getActiveSiteConfig().host;
+            var apiKey = resolveKey(false);
+            if (node.data.keyLevel === 'high') { var hk = resolveKey(true); if (hk) apiKey = hk; }
+            var token = sanitizeHeaderValue(apiKey.startsWith('Bearer ') ? apiKey : 'Bearer ' + apiKey);
+            var taskId = node.data._taskId;
+            var isOpenAI = node.data._isOpenAI;
+            try {
+                var pollUrl;
+                if (isOpenAI) {
+                    pollUrl = host.replace(/\/$/, '') + '/v1/images/tasks/' + taskId;
+                } else {
+                    pollUrl = host.replace(/\/$/, '') + '/v1/api/result?id=' + taskId;
+                }
+                var pollRes = await fetch(pollUrl, { headers: { 'Authorization': token } });
+                var pData = await pollRes.json();
+                var finalUrls = [];
+                if (isOpenAI) {
+                    var innerData = (pData.data && pData.data.data) || {};
+                    var items = innerData.data || (Array.isArray(innerData) ? innerData : []);
+                    for (var u = 0; u < items.length; u++) {
+                        if (items[u].url) finalUrls.push(items[u].url);
+                        else if (items[u].b64_json) finalUrls.push('data:image/png;base64,' + items[u].b64_json);
+                    }
+                } else {
+                    finalUrls = (pData.results || []).map(function(r) { return r.url; });
+                }
+                if (finalUrls.length > 0) {
+                    node.data._resultUrl = finalUrls[0];
+                    var newImgData = finalUrls[0];
+                    try { newImgData = await convertImgToBlobUrl(finalUrls[0]); } catch(e) {}
+                    node.data.b64 = newImgData;
+                    node.data.status = 'succeeded';
+                    editor.updateNodeDataFromId(genId, node.data);
+                    var el = document.getElementById('node-' + genId);
+                    if (el) {
+                        var ph = el.querySelector('.gen-placeholder');
+                        if (ph) ph.style.display = 'none';
+                        var iel = el.querySelector('.gen-img');
+                        if (iel) { iel.src = newImgData; iel.style.display = 'block'; }
+                    }
+                    createToastMsg("✅ 图片获取成功！");
+                    return;
+                }
+                createToastMsg("⚠️ 任务尚未完成，请稍后重试", true);
+            } catch(e) {
+                createToastMsg("❌ 查询失败: " + e.message, true);
+            }
+            return;
+        }
+
+        // 3. 无任务信息，提示用户
+        createToastMsg("⚠️ 该节点无已提交的任务记录，请先生成", true);
+    };
+
     // ==================== 图片生成轮询(按站点分流) ====================
     // isOpenAI=true: COM/贞贞 管线, isOpenAI=false: GRS 管线
     async function pollTaskInBackground(host, token, taskId, taskCard, finalText, genId, imgNodes, nodeRatio, nodeSize, isGptModel, isOpenAI) {
@@ -3621,22 +3716,23 @@
                         }
                         
                         if (finalUrls.length > 0) {
-                            let imgData = finalUrls[0]; 
-                            try { 
-                                imgData = await convertImgToBlobUrl(finalUrls[0]); 
-                            } catch(e) { 
-                                console.warn("跨域限制，回退网络URL"); 
+                            let imgData = finalUrls[0];
+                            try {
+                                imgData = await convertImgToBlobUrl(finalUrls[0]);
+                            } catch(e) {
+                                console.warn("跨域限制，回退网络URL");
                             }
-                            
+
                             let gNode = editor.getNodeFromId(genId);
                             if(gNode) {
-                                gNode.data.b64 = imgData; 
+                                gNode.data.b64 = imgData;
+                                gNode.data._resultUrl = finalUrls[0]; // 保存原始结果 URL 供手动获取用
                                 editor.updateNodeDataFromId(genId, gNode.data);
                                 const el = document.getElementById(`node-${genId}`);
-                                if(el) { 
+                                if(el) {
                                     const placeholder = el.querySelector('.gen-placeholder');
-                                    if(placeholder) placeholder.style.display = 'none'; 
-                                    const imgEl = el.querySelector('.gen-img'); 
+                                    if(placeholder) placeholder.style.display = 'none';
+                                    const imgEl = el.querySelector('.gen-img');
                                     if(imgEl) { imgEl.src = imgData; imgEl.style.display = 'block'; }
                                 }
                             }
@@ -4550,7 +4646,7 @@
         try {
             const res = await fetch(apiUrl + videoEndpoint, {
                 method: 'POST', mode: 'cors',
-                headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey },
+                headers: { 'Content-Type': 'application/json', 'Authorization': sanitizeHeaderValue('Bearer ' + apiKey) },
                 body: JSON.stringify(payload)
             });
             let data;
@@ -4605,7 +4701,7 @@
                 var pollUrl = isZhiheFormat() ? finalHost.replace(/\/$/, '') + '/v1/skills/task-status?task_id=' + taskId : finalHost + '/v1/video/query?id=' + taskId;
                 const res = await fetch(pollUrl, {
                     mode: 'cors',
-                    headers: { 'Authorization': 'Bearer ' + apiKey }
+                    headers: { 'Authorization': sanitizeHeaderValue('Bearer ' + apiKey) }
                 });
                 const data = await res.json();
 
@@ -4771,7 +4867,7 @@
         try {
             const res = await fetch(apiUrl + videoEndpoint, {
                 method: 'POST', mode: 'cors',
-                headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey },
+                headers: { 'Content-Type': 'application/json', 'Authorization': sanitizeHeaderValue('Bearer ' + apiKey) },
                 body: JSON.stringify(payload)
             });
             let data;
@@ -4824,7 +4920,7 @@
                 var pollUrl = isZhiheFormat() ? finalHost.replace(/\/$/, '') + '/v1/skills/task-status?task_id=' + taskId : finalHost + '/v1/video/query?id=' + taskId;
                 const res = await fetch(pollUrl, {
                     mode: 'cors',
-                    headers: { 'Authorization': 'Bearer ' + apiKey }
+                    headers: { 'Authorization': sanitizeHeaderValue('Bearer ' + apiKey) }
                 });
                 const data = await res.json();
 
