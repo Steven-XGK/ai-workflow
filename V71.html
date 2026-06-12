@@ -4057,12 +4057,14 @@
         }
 
         // Write project.json
-        document.getElementById('loadingText').innerText = '写入项目文件...'; await new Promise(r => setTimeout(r, 0));
-        const jsonBlob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
-        const jsonFile = await dirHandle.getFileHandle('project.json', { create: true });
-        const jsonWritable = await jsonFile.createWritable();
-        await jsonWritable.write(jsonBlob);
-        await jsonWritable.close();
+        try {
+            document.getElementById('loadingText').innerText = '写入项目文件...'; await new Promise(r => setTimeout(r, 0));
+            const jsonBlob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+            const jsonFile = await dirHandle.getFileHandle('project.json', { create: true });
+            const jsonWritable = await jsonFile.createWritable();
+            await jsonWritable.write(jsonBlob);
+            await jsonWritable.close();
+        } catch(e) { console.warn('project.json 写入失败:', e); throw e; }
 
         // Write images
         const imgEntries = Object.entries(imgMap);
@@ -4071,10 +4073,12 @@
         for (let i = 0; i < imgEntries.length; i++) {
             const [fname, blob] = imgEntries[i];
             document.getElementById('loadingText').innerText = `写入图片 ${i+1}/${imgEntries.length}...`;
-            const fileHandle = await imgDir.getFileHandle(fname, { create: true });
-            const writable = await fileHandle.createWritable();
-            await writable.write(blob);
-            await writable.close();
+            try {
+                const fileHandle = await imgDir.getFileHandle(fname, { create: true });
+                const writable = await fileHandle.createWritable();
+                await writable.write(blob);
+                await writable.close();
+            } catch(e) { console.warn('图片写入失败:', fname, e); createToastMsg('⚠️ 图片 ' + fname + ' 写入失败', true); }
             if (i % 2 === 0) await new Promise(r => setTimeout(r, 0)); // 每2张让出主线程
         }
 
@@ -4086,10 +4090,12 @@
             for (let i = 0; i < vidEntries.length; i++) {
                 const [fname, blob] = vidEntries[i];
                 document.getElementById('loadingText').innerText = `写入视频 ${i+1}/${vidEntries.length}...`;
-                const fileHandle = await vidDir.getFileHandle(fname, { create: true });
-                const writable = await fileHandle.createWritable();
-                await writable.write(blob);
-                await writable.close();
+                try {
+                    const fileHandle = await vidDir.getFileHandle(fname, { create: true });
+                    const writable = await fileHandle.createWritable();
+                    await writable.write(blob);
+                    await writable.close();
+                } catch(e) { console.warn('视频写入失败:', fname, e); createToastMsg('⚠️ 视频 ' + fname + ' 写入失败', true); }
                 if (i % 2 === 0) await new Promise(r => setTimeout(r, 0));
             }
         }
@@ -4145,45 +4151,53 @@
         projectFolderName = projName;
         const safeName = projName.replace(/[<>:"/\\|?*]/g, '_').trim() || 'AI_Workflow';
         showLoading("正在打包项目...");
-        
+
         setTimeout(async () => {
-            const exportState = { drawflow: editor.export(), projectName: safeName, savedAt: Date.now() };
-            const zip = new JSZip();
-            const imgFolder = zip.folder("images");
-            const flowData = exportState.drawflow.drawflow.Home.data;
-            var flowKeys = Object.keys(flowData);
-            for (let fi = 0; fi < flowKeys.length; fi++) {
-                const key = flowKeys[fi];
-                const n = flowData[key];
-                if (fi % 5 === 0) { document.getElementById('loadingText').innerText = `处理节点 ${fi+1}/${flowKeys.length}...`; await new Promise(r => setTimeout(r, 0)); }
-                if (n.data && n.data.b64) {
-                    let blobData = null, ext = 'png';
-                    if (n.data.b64.startsWith('blob:')) {
-                        blobData = window.imageBlobCache.get(n.data.b64);
-                        if (blobData && blobData.type === 'image/jpeg') ext = 'jpg';
-                        else if (blobData && blobData.type === 'image/webp') ext = 'webp';
-                    } else if (n.data.b64.startsWith('data:image')) {
-                        blobData = dataURLtoBlob(n.data.b64);
-                        const m = n.data.b64.match(/:(.*?);/);
-                        if (m && m[1] === 'image/jpeg') ext = 'jpg';
-                        else if (m && m[1] === 'image/webp') ext = 'webp';
+            try {
+                const exportState = { drawflow: editor.export(), projectName: safeName, savedAt: Date.now() };
+                const zip = new JSZip();
+                const imgFolder = zip.folder("images");
+                const flowData = exportState.drawflow.drawflow.Home.data;
+                var flowKeys = Object.keys(flowData);
+                for (let fi = 0; fi < flowKeys.length; fi++) {
+                    const key = flowKeys[fi];
+                    const n = flowData[key];
+                    if (fi % 5 === 0) { document.getElementById('loadingText').innerText = `处理节点 ${fi+1}/${flowKeys.length}...`; await new Promise(r => setTimeout(r, 0)); }
+                    if (n.data && n.data.b64) {
+                        try {
+                            let blobData = null, ext = 'png';
+                            if (n.data.b64.startsWith('blob:')) {
+                                blobData = window.imageBlobCache.get(n.data.b64);
+                                if (blobData && blobData.type === 'image/jpeg') ext = 'jpg';
+                                else if (blobData && blobData.type === 'image/webp') ext = 'webp';
+                            } else if (n.data.b64.startsWith('data:image')) {
+                                blobData = dataURLtoBlob(n.data.b64);
+                                const m = n.data.b64.match(/:(.*?);/);
+                                if (m && m[1] === 'image/jpeg') ext = 'jpg';
+                                else if (m && m[1] === 'image/webp') ext = 'webp';
+                            }
+                            if (blobData) {
+                                const fname = `node_${key}.${ext}`;
+                                imgFolder.file(fname, blobData, { compression: 'STORE' });
+                                n.data.b64 = `images/${fname}`;
+                            }
+                        } catch(e) { console.warn('节点 ' + key + ' 图片处理失败:', e); }
+                        await new Promise(r => setTimeout(r, 0));
                     }
-                    if (blobData) {
-                        const fname = `node_${key}.${ext}`;
-                        imgFolder.file(fname, blobData, { compression: 'STORE' });
-                        n.data.b64 = `images/${fname}`;
-                    }
-                    await new Promise(r => setTimeout(r, 0));
                 }
+                document.getElementById('loadingText').innerText = '生成 ZIP 文件...'; await new Promise(r => setTimeout(r, 0));
+                stripHtmlFromExport(flowData);
+                zip.file("project.json", JSON.stringify(exportState));
+                zip.generateAsync({ type: "blob", compression: 'STORE' }).then(function(content) {
+                    var d = new Date(); var ts = d.getFullYear() + ('0'+(d.getMonth()+1)).slice(-2) + ('0'+d.getDate()).slice(-2) + '_' + ('0'+d.getHours()).slice(-2) + ('0'+d.getMinutes()).slice(-2) + ('0'+d.getSeconds()).slice(-2);
+                    const link = document.createElement('a'); link.href = URL.createObjectURL(content); link.download = safeName + '_' + ts + '.zip'; link.click();
+                    hideLoading(); createToastMsg(`💾 项目 "${safeName}" 保存成功！`);
+                }, function(err) {
+                    hideLoading(); createToastMsg("❌ ZIP 生成失败: " + err.message, true);
+                });
+            } catch(e) {
+                hideLoading(); createToastMsg("❌ 打包失败: " + e.message, true);
             }
-            document.getElementById('loadingText').innerText = '生成 ZIP 文件...'; await new Promise(r => setTimeout(r, 0));
-            stripHtmlFromExport(flowData);
-            zip.file("project.json", JSON.stringify(exportState));
-            zip.generateAsync({ type: "blob", compression: 'STORE' }).then(function(content) {
-                var d = new Date(); var ts = d.getFullYear() + ('0'+(d.getMonth()+1)).slice(-2) + ('0'+d.getDate()).slice(-2) + '_' + ('0'+d.getHours()).slice(-2) + ('0'+d.getMinutes()).slice(-2) + ('0'+d.getSeconds()).slice(-2);
-                const link = document.createElement('a'); link.href = URL.createObjectURL(content); link.download = safeName + '_' + ts + '.zip'; link.click();
-                hideLoading(); createToastMsg(`💾 项目 "${safeName}" 保存成功！`);
-            });
         }, 100);
     };
 
