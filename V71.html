@@ -4178,7 +4178,8 @@
                             }
                             if (blobData) {
                                 const fname = `node_${key}.${ext}`;
-                                imgFolder.file(fname, blobData, { compression: 'STORE' });
+                                var safeBlob = new Blob([await blobData.arrayBuffer()], { type: blobData.type || 'image/png' });
+                                imgFolder.file(fname, safeBlob, { compression: 'STORE' });
                                 n.data.b64 = `images/${fname}`;
                             }
                         } catch(e) { console.warn('节点 ' + key + ' 图片处理失败:', e); }
@@ -4375,10 +4376,17 @@
 
                     if (blobData) {
                         const filename = `node_${key}_${Date.now()}.${ext}`;
-                        imgFolder.file(filename, blobData, { compression: 'STORE' });
-                        n.data.b64 = `images/${filename}`;
-                        processed++;
-                        document.getElementById('loadingText').innerText = `打包图片 ${processed}/${imgCount}...`;
+                        try {
+                            // 提前读入内存（避免 JSZip 延迟读取 File 对象时丢失访问权限）
+                            var arrBuf = await blobData.arrayBuffer();
+                            var safeBlob = new Blob([arrBuf], { type: blobData.type || 'image/png' });
+                            imgFolder.file(filename, safeBlob, { compression: 'STORE' });
+                            n.data.b64 = `images/${filename}`;
+                            processed++;
+                            document.getElementById('loadingText').innerText = `打包图片 ${processed}/${imgCount}...`;
+                        } catch(e) {
+                            console.warn('图片 ' + filename + ' 读取失败，跳过:', e);
+                        }
                     }
                     await new Promise(r => setTimeout(r, 0)); // 每次大图转换后让出主线程
                 }
