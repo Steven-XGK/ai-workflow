@@ -3247,7 +3247,9 @@
                 try { const errData = await response.json(); if(errData.msg) errorMsg = errData.msg; } catch(e){}
                 throw new Error(errorMsg);
             }
-            const res = await response.json();
+            const resText = await response.text();
+            if (!resText) throw new Error("服务器返回空响应");
+            const res = JSON.parse(resText);
             var taskId = res.id || res.data || res.task_id || null;
             if (typeof taskId === 'object') taskId = taskId.task_id || taskId.id || null;
             if (!taskId) throw new Error(res.error || res.msg || res.message || "未获取到任务ID");
@@ -3617,7 +3619,9 @@
                     pollUrl = host.replace(/\/$/, '') + '/v1/api/result?id=' + taskId;
                 }
                 var pollRes = await fetch(pollUrl, { headers: { 'Authorization': token } });
-                var pData = await pollRes.json();
+                var pollText = await pollRes.text();
+                if (!pollText) { createToastMsg("⚠️ 查询返回空响应", true); return; }
+                var pData = JSON.parse(pollText);
                 var finalUrls = [];
                 if (isOpenAI) {
                     var innerData = (pData.data && pData.data.data) || {};
@@ -3674,7 +3678,9 @@
                     pollUrl = host.replace(/\/$/, "") + '/v1/api/result?id=' + taskId;
                 }
                 const pollRes = await fetch(pollUrl, { method: 'GET', headers: { 'Content-Type': 'application/json', 'Authorization': token } });
-                const pData = await pollRes.json();
+                const pollText = await pollRes.text();
+                if (!pollText) { taskCard.innerHTML = '⚠️ <div>轮询返回空响应</div>'; return; }
+                const pData = JSON.parse(pollText);
                 var hasData, status, progress, succeeded, failed;
                 if (isOpenAI) {
                     hasData = pData.data;
