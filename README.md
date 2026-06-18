@@ -7,5 +7,5 @@ https://steven-xgk.github.io/ai-workflow/V67.html
 
 https://steven-xgk.github.io/ai-workflow/V70.html
 
-https://steven-xgk.github.io/ai-workflow/V71.html
+https://steven-xgk.github.io/ai-workflow/V72.html
 后面添加文件名访问之前版本，作为备份使用
