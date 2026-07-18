@@ -3,7 +3,7 @@ https://steven-xgk.github.io/ai-workflow/
 
 ----------------
 也可以通过
-https://steven-xgk.github.io/ai-workflow/V70.html
+https://steven-xgk.github.io/ai-workflow/index.html
 
 https://steven-xgk.github.io/ai-workflow/V73.html
 
